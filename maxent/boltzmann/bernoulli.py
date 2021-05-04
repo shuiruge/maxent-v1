@@ -140,7 +140,7 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
     }
 
   @property
-  def params_and_ops(self):
+  def params_and_obs(self):
     result = []
     result += [(
         self.ambient_latent_kernel,
@@ -316,7 +316,7 @@ class LogInternalInformation(Callback):
         self.bm.get_latent_given_ambient(real_ambient)
         .sample(self.bm.seed))
     stats(real_latent, 'real_latent')
-    for param, _ in self.bm.params_and_ops:
+    for param, _ in self.bm.params_and_obs:
       stats(param, param.name)
 
     recon_error = get_reconstruction_error(self.bm, real_ambient)

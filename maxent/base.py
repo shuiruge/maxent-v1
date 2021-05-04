@@ -9,7 +9,7 @@ class Particles(abc.ABC):
   """A batch of particles of the MaxEnt model."""
 
 
-class Operator(abc.ABC):
+class Observable(abc.ABC):
 
   @abc.abstractmethod
   def __call__(self, particles: Particles) -> tf.Tensor:
@@ -19,7 +19,7 @@ class Operator(abc.ABC):
 class MaxEntModel(abc.ABC):
 
   @abc.abstractproperty
-  def params_and_ops(self) -> List[Tuple[tf.Tensor, Operator]]:
+  def params_and_obs(self) -> List[Tuple[tf.Tensor, Observable]]:
     return NotImplemented
 
 
@@ -27,7 +27,7 @@ def get_grads_and_vars(max_ent_model: MaxEntModel,
                        real_particles: Particles,
                        fantasy_particles: Particles):
   grads_and_vars: List[Tuple[tf.Tensor, tf.Tensor]] = []
-  for param, op in max_ent_model.params_and_ops:
-    grad_param = expect(op(fantasy_particles)) - expect(op(real_particles))
+  for param, ob in max_ent_model.params_and_obs:
+    grad_param = expect(ob(fantasy_particles)) - expect(ob(real_particles))
     grads_and_vars.append((grad_param, param))
   return grads_and_vars

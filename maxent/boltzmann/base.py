@@ -176,8 +176,8 @@ def get_reconstruction_error(bm: BoltzmannMachine,
 
 def quantize(bm: BoltzmannMachine, precision: float):
   quantized_bm = deepcopy(bm)
-  for i, (param, _) in enumerate(bm.params_and_ops):
-    quantized_bm.params_and_ops[i][0].assign(
+  for i, (param, _) in enumerate(bm.params_and_obs):
+    quantized_bm.params_and_obs[i][0].assign(
         quantize_tensor(param, precision))
   return quantized_bm
 
