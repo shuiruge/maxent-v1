@@ -1,8 +1,9 @@
 import abc
 import tensorflow as tf
+from copy import deepcopy
 from typing import List, Tuple
 
-from maxent.utils import expect
+from maxent.utils import expect, quantize_tensor
 
 
 class Particles(abc.ABC):
@@ -31,3 +32,11 @@ def get_grads_and_vars(max_ent_model: MaxEntModel,
     grad_param = expect(ob(fantasy_particles)) - expect(ob(real_particles))
     grads_and_vars.append((grad_param, param))
   return grads_and_vars
+
+
+def quantize(model: MaxEntModel, precision: float):
+  quantized_bm = deepcopy(model)
+  for i, (param, _) in enumerate(model.params_and_obs):
+    quantized_bm.params_and_obs[i][0].assign(
+        quantize_tensor(param, precision))
+  return quantized_bm

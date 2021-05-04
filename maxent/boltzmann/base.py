@@ -1,10 +1,9 @@
 import abc
 import tensorflow as tf
-from copy import deepcopy
 from typing import Callable, List, Optional
 
 from maxent.base import MaxEntModel, Particles, get_grads_and_vars
-from maxent.utils import inplace, infinity_norm, quantize_tensor, random
+from maxent.utils import inplace, infinity_norm, random
 
 
 class State(Particles):
@@ -172,14 +171,6 @@ def get_reconstruction_error(bm: BoltzmannMachine,
   latent = bm.get_latent_given_ambient(ambient).prob_argmax
   recon_ambient = bm.activate(State(ambient, latent)).ambient
   return norm(recon_ambient - ambient)
-
-
-def quantize(bm: BoltzmannMachine, precision: float):
-  quantized_bm = deepcopy(bm)
-  for i, (param, _) in enumerate(bm.params_and_obs):
-    quantized_bm.params_and_obs[i][0].assign(
-        quantize_tensor(param, precision))
-  return quantized_bm
 
 
 class UpdateWithMasks:
