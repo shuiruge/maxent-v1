@@ -4,7 +4,7 @@ import abc
 import numpy as np
 import tensorflow as tf
 from collections import defaultdict
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Set
 from functools import wraps
 
 
@@ -121,12 +121,22 @@ class History:
     return show_str
 
 
-# TODO: Use this instead: https://stackoverflow.com/questions/37001686/using-sparsetensor-as-a-trainable-variable/37807830#37807830  # noqa: E501
+class ComposedConstraint(tf.keras.constraints.Constraint):
+
+  def __init__(self, constraints: List[tf.keras.constraints.Constraint]):
+    self.constraints = constraints
+  
+  def __call__(self, kernel: tf.Tensor):
+    result = kernel
+    for constraint in self.constraints:
+      result = constraint(result)
+    return result
+
+
 class SparsityConstraint(tf.keras.constraints.Constraint):
 
-  def __init__(self, sparsity: float, seed: int):
-    self.sparsity = sparsity
-    self.seed = seed
+  def __init__(self, connections: List[Set[int]]):
+    self.connections = connections
 
     self.mask = None
     self.built = False
@@ -137,11 +147,24 @@ class SparsityConstraint(tf.keras.constraints.Constraint):
     return self.mask * kernel
 
   def build(self, shape, dtype):
-    rand = random(shape=shape, seed=self.seed)
-    self.mask = tf.cast(
-        tf.where(rand > self.sparsity, 1, 0),
-        dtype)
+    mask = np.zeros(shape)
+    for i, js in enumerate(self.connections):
+      for j in js:
+        mask[i, j] = 1
+    self.mask = tf.convert_to_tensor(mask, dtype=dtype)
     self.built = True
+
+
+def get_random_connections(input_size: int,
+                           output_size: int,
+                           num_connections_per_units: int):
+  connections = []
+  for _ in range(input_size):
+    connection = np.random.choice(range(output_size),
+                                  size=num_connections_per_units,
+                                  replace=False)
+    connections.append(set(connection))
+  return connections
 
 
 class SymmetricDiagonalVanishingConstraint(tf.keras.constraints.Constraint):
