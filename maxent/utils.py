@@ -4,7 +4,7 @@ import abc
 import numpy as np
 import tensorflow as tf
 from collections import defaultdict
-from typing import Callable, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 from functools import wraps
 
 
@@ -133,9 +133,35 @@ class ComposedConstraint(tf.keras.constraints.Constraint):
     return result
 
 
+class Connections:
+  pass
+
+
+class EmptyConnections(Connections):
+  pass
+
+
+class DenseConnections(Connections):
+  pass
+
+
+class SparseConnections(Connections):
+
+  def __init__(self):
+    self._connected: Dict[int, Set[int]] = defaultdict(set)
+  
+  def __iter__(self):
+    for i, js in self._connected.items():
+      for j in js:
+        yield i, j
+  
+  def connect(self, i: int, j: int):
+    self._connected[i].add(j)
+
+
 class SparsityConstraint(tf.keras.constraints.Constraint):
 
-  def __init__(self, connections: List[Set[int]]):
+  def __init__(self, connections: SparseConnections):
     self.connections = connections
 
     self.mask = None
@@ -148,9 +174,8 @@ class SparsityConstraint(tf.keras.constraints.Constraint):
 
   def build(self, shape, dtype):
     mask = np.zeros(shape)
-    for i, js in enumerate(self.connections):
-      for j in js:
-        mask[i, j] = 1
+    for i, j in self.connections:
+      mask[i, j] = 1
     self.mask = tf.convert_to_tensor(mask, dtype=dtype)
     self.built = True
 
@@ -158,12 +183,13 @@ class SparsityConstraint(tf.keras.constraints.Constraint):
 def get_random_connections(input_size: int,
                            output_size: int,
                            num_connections_per_units: int):
-  connections = []
-  for _ in range(input_size):
-    connection = np.random.choice(range(output_size),
-                                  size=num_connections_per_units,
-                                  replace=False)
-    connections.append(set(connection))
+  connections = SparseConnections()
+  for i in range(input_size):
+    js = np.random.choice(range(output_size),
+                          size=num_connections_per_units,
+                          replace=False)
+    for j in js:
+      connections.connect(i, j)
   return connections
 
 

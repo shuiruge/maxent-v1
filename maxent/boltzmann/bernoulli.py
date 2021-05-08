@@ -6,8 +6,10 @@ from maxent.boltzmann.base import (
     Distribution, Initializer, State, BoltzmannMachine, Callback,
     async_update)
 from maxent.utils import (
-    ComposedConstraint, History, SparsityConstraint, SymmetricDiagonalVanishingConstraint,
-    create_variable, outer, random, expect, infinity_norm, update_with_mask)
+    ComposedConstraint, History, Connections, EmptyConnections,
+    DenseConnections, SparseConnections, SparsityConstraint,
+    SymmetricDiagonalVanishingConstraint, create_variable, outer, random,
+    expect, infinity_norm, update_with_mask)
 
 
 def get_batch_size(batch_of_data: tf.Tensor):
@@ -92,9 +94,9 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
                initializer: Initializer,
                max_step: int = 10,
                tolerance: float = 1e-1,
-               ambient_ambient_connections: Optional[List[Set[int]]] = None,
-               ambient_latent_connections: Optional[List[Set[int]]] = None,
-               latent_latent_connections: Optional[List[Set[int]]] = None,
+               ambient_ambient_connections: Connections = DenseConnections(),
+               ambient_latent_connections: Connections = DenseConnections(),
+               latent_latent_connections: Connections = DenseConnections(),
                use_latent_bias: bool = True,
                sync_ratio: float = 1,
                debug_mode: bool = False,
@@ -114,17 +116,14 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
     self.seed = seed
 
     def get_constraint(connections, symmetric):
-      if connections and symmetric:
-        return ComposedConstraint([
-            SparsityConstraint(connections),
-            SymmetricDiagonalVanishingConstraint(),
-        ])
-      elif connections:
-        return SparsityConstraint(connections)
-      elif symmetric:
-        return SymmetricDiagonalVanishingConstraint()
-      else:
-        return None
+      constraint_comps = []
+      if isinstance(connections, SparseConnections):
+        constraint_comps.append(SparsityConstraint(connections))
+      if symmetric:
+        constraint_comps.append(SymmetricDiagonalVanishingConstraint())
+      if constraint_comps:
+        return ComposedConstraint(constraint_comps)
+      return None
 
     self.ambient_ambient_kernel = create_variable(
         name='ambient_ambient_kernel',
@@ -164,7 +163,7 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
         'tolerance': self.tolerance,
         'ambient_ambient_connections': self.ambient_ambient_connections,
         'ambient_latent_connections': self.ambient_latent_connections,
-        'connect_latent_to_latent': self.connect_latent_to_latent,
+        'latent_latent_connections': self.latent_latent_connections,
         'use_latent_bias': self.use_latent_bias,
         'sync_ratio': self.sync_ratio,
         'debug_mode': self.debug_mode,
@@ -187,12 +186,12 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
           self.latent_bias,
           lambda state: state.latent,
       )]
-    if self.ambient_ambient_connections != []:
+    if not isinstance(self.ambient_ambient_connections, EmptyConnections):
       result += [(
           self.ambient_ambient_kernel,
           lambda state: outer(state.ambient, state.ambient),
       )]
-    if self.latent_latent_connections != []:
+    if not isinstance(self.latent_latent_connections, EmptyConnections):
       result += [(
           self.latent_latent_kernel,
           lambda state: outer(state.latent, state.latent),
