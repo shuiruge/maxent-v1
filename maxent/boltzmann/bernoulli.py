@@ -1,13 +1,17 @@
+from enum import EnumMeta
 import tensorflow as tf
-from typing import Optional
+import matplotlib.pyplot as plt
+from typing import List, Optional, Tuple
 
 import maxent.boltzmann.base as B
 from maxent.boltzmann.base import (
     Distribution, Initializer, State, BoltzmannMachine, Callback,
     async_update)
 from maxent.utils import (
-    History, SymmetricDiagonalVanishingConstraint, create_variable,
-    outer, random, expect, infinity_norm, update_with_mask)
+    ComposedConstraint, History, Connections, NoConnection,
+    DenseConnections, SparseConnections, SparsityConstraint,
+    SymmetricDiagonalVanishingConstraint, create_variable, outer, random,
+    expect, infinity_norm, update_with_mask)
 
 
 def get_batch_size(batch_of_data: tf.Tensor):
@@ -70,6 +74,21 @@ class HintonInitializer(Initializer):
 
 
 class BernoulliBoltzmannMachine(BoltzmannMachine):
+  """
+  Parameters
+  ----------
+  max_step:
+    The parameter in the mean-field approximation.
+  tolerence:
+    The parameter in the mean-field approximation.
+  ambient_ambient_connections:
+    If the connections are empty, then no connection at all; if `None`, then
+    it's fully connected. The same for ambient_latent_connections, e.t.c.
+  The sync ratio:
+    TODO
+  debug_mode:
+    TODO
+  """
 
   def __init__(self,
                ambient_size: int,
@@ -77,8 +96,9 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
                initializer: Initializer,
                max_step: int = 10,
                tolerance: float = 1e-1,
-               connect_ambient_to_ambient: bool = True,
-               connect_latent_to_latent: bool = True,
+               ambient_ambient_connections: Connections = DenseConnections(),
+               ambient_latent_connections: Connections = DenseConnections(),
+               latent_latent_connections: Connections = DenseConnections(),
                use_latent_bias: bool = True,
                sync_ratio: float = 1,
                debug_mode: bool = False,
@@ -89,18 +109,29 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
     self.seed = seed
     self.max_step = max_step
     self.tolerance = tolerance
-    self.connect_ambient_to_ambient = connect_ambient_to_ambient
-    self.connect_latent_to_latent = connect_latent_to_latent
+    self.ambient_ambient_connections = ambient_ambient_connections
+    self.ambient_latent_connections = ambient_latent_connections
+    self.latent_latent_connections = latent_latent_connections
     self.use_latent_bias = use_latent_bias
     self.sync_ratio = sync_ratio
     self.debug_mode = debug_mode
     self.seed = seed
 
+    def get_constraint(connections, symmetric):
+      constraint_comps = []
+      if isinstance(connections, SparseConnections):
+        constraint_comps.append(SparsityConstraint(connections))
+      if symmetric:
+        constraint_comps.append(SymmetricDiagonalVanishingConstraint())
+      if constraint_comps:
+        return ComposedConstraint(constraint_comps)
+      return None
+
     self.ambient_ambient_kernel = create_variable(
         name='ambient_ambient_kernel',
         shape=[ambient_size, ambient_size],
         initializer=initializer.ambient_ambient_kernel,
-        constraint=SymmetricDiagonalVanishingConstraint(),
+        constraint=get_constraint(self.ambient_ambient_connections, True),
     )
     self.ambient_bias = create_variable(
         name='ambient_bias',
@@ -111,7 +142,7 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
         name='latent_latent_kernel',
         shape=[latent_size, latent_size],
         initializer=initializer.latent_latent_kernel,
-        constraint=SymmetricDiagonalVanishingConstraint(),
+        constraint=get_constraint(self.latent_latent_connections, True),
     )
     self.latent_bias = create_variable(
         name='latent_bias',
@@ -122,6 +153,7 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
         name='ambient_latent_kernel',
         shape=[ambient_size, latent_size],
         initializer=initializer.ambient_latent_kernel,
+        constraint=get_constraint(self.ambient_latent_connections, False),
     )
 
   def get_config(self):
@@ -131,8 +163,9 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
         'initializer': self.initializer,
         'max_step': self.max_step,
         'tolerance': self.tolerance,
-        'connect_ambient_to_ambient': self.connect_ambient_to_ambient,
-        'connect_latent_to_latent': self.connect_latent_to_latent,
+        'ambient_ambient_connections': self.ambient_ambient_connections,
+        'ambient_latent_connections': self.ambient_latent_connections,
+        'latent_latent_connections': self.latent_latent_connections,
         'use_latent_bias': self.use_latent_bias,
         'sync_ratio': self.sync_ratio,
         'debug_mode': self.debug_mode,
@@ -155,12 +188,12 @@ class BernoulliBoltzmannMachine(BoltzmannMachine):
           self.latent_bias,
           lambda state: state.latent,
       )]
-    if self.connect_ambient_to_ambient:
+    if not isinstance(self.ambient_ambient_connections, NoConnection):
       result += [(
           self.ambient_ambient_kernel,
           lambda state: outer(state.ambient, state.ambient),
       )]
-    if self.connect_latent_to_latent:
+    if not isinstance(self.latent_latent_connections, NoConnection):
       result += [(
           self.latent_latent_kernel,
           lambda state: outer(state.latent, state.latent),
@@ -266,7 +299,7 @@ def mean_field_approx(bm: BernoulliBoltzmannMachine,
   batch_size = get_batch_size(v)
   mu = random([batch_size, bm.latent_size], seed)
   step = 1
-  while step <= max_step:
+  while tf.less_equal(step, max_step):
     new_mu = tf.sigmoid(v @ W + mu @ J + bh)
     if infinity_norm(new_mu - mu) < tolerance:
       break
@@ -283,47 +316,62 @@ def initialize_fantasy_state(bm: BernoulliBoltzmannMachine,
 
   ambient_p = 0.5 * tf.ones([num_samples, bm.ambient_size])
   ambient = Bernoulli(ambient_p).sample(seed)
-  ambient = bm.activate(State(ambient, latent)).ambient
-  # XXX: why not directly return bm.activate(State(ambient, latent))
-  return State(ambient, latent)
+  return bm.activate(State(ambient, latent))
 
 
 class LogInternalInformation(Callback):
 
   def __init__(self,
                bm: BernoulliBoltzmannMachine,
-               log_step: int,
-               verbose: bool):
+               log_step: int):
     self.bm = bm
     self.log_step = log_step
-    self.verbose = verbose
 
     self.history = History()
 
   def __call__(self,
                step: int,
-               real_ambient: tf.Tensor,
-               _: State):
+               real_state: State,
+               fantasy_state: State,
+               grad_and_vars: List[Tuple[tf.Tensor, tf.Tensor]]):
     if step % self.log_step != 0:
       return
 
     def stats(x, name):
       mean, var = tf.nn.moments(x, axes=range(len(x.shape)))
       std = tf.sqrt(var)
-      self.history.log(step, f'{name}', f'{mean:.5f} ({std:.5f})')
+      self.history.log(step, name, (mean, std))
 
-    real_latent = (
-        self.bm.get_latent_given_ambient(real_ambient)
-        .sample(self.bm.seed))
-    stats(real_latent, 'real_latent')
-    for param, _ in self.bm.params_and_obs:
-      stats(param, param.name)
+    stats(real_state.ambient, 'real_ambient')
+    stats(real_state.latent, 'real_latent')
+    stats(fantasy_state.ambient, 'fantasy_ambient')
+    stats(fantasy_state.latent, 'fantasy_latent')
+    for grad, var_ in grad_and_vars:
+      stats(var_, var_.name)
+      stats(grad, f'grad_{var_.name}')
 
-    recon_error = get_reconstruction_error(self.bm, real_ambient)
-    self.history.log(step, 'recon_error', recon_error)
+    recon_error = get_reconstruction_error(self.bm, real_state.ambient)
+    stats(recon_error, 'recon_error')
 
-    if self.verbose:
-      print(self.history.show(step))
+  def plot_history(self, figuresize: Tuple[int, int] = (10, 3)):
+    steps = list(self.history.logs.keys())
+    keys = list(list(self.history.logs.values())[0].keys())
+    _, axs = plt.subplots(
+        nrows=len(keys),
+        ncols=1,
+        figsize=(figuresize[0], len(keys) * figuresize[1]),
+        sharex=True)
+
+    for i, key in enumerate(keys):
+      means, upper, lower = [], [], []
+      for step in steps:
+        mean, std = self.history.logs[step][key]
+        means.append(mean)
+        upper.append(mean + std)
+        lower.append(mean - std)
+      axs[i].plot(steps, means, label=key)
+      axs[i].fill_between(steps, lower, upper, alpha=0.2)
+      axs[i].legend()
 
 
 def get_reconstruction_error(bm: BernoulliBoltzmannMachine,
@@ -333,10 +381,6 @@ def get_reconstruction_error(bm: BernoulliBoltzmannMachine,
     return tf.reduce_mean(tf.where(x != 0, 1., 0.))
 
   return B.get_reconstruction_error(bm, ambient, norm)
-
-
-def is_restricted(bm: BernoulliBoltzmannMachine):
-  return not bm.connect_ambient_to_ambient and not bm.connect_latent_to_latent
 
 
 class LatentIncrementingInitializer(Initializer):
@@ -420,6 +464,7 @@ def enlarge_latent(base_bm: BernoulliBoltzmannMachine,
   config = base_bm.get_config()
   config['latent_size'] += increment
   config['initializer'] = LatentIncrementingInitializer(base_bm, increment)
+  # TODO: config['latent_latent_connections'], e.t.c.
   bm = BernoulliBoltzmannMachine(**config)
 
   fantasy_ambient = base_fantasy_state.ambient

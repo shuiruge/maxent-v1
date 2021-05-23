@@ -34,9 +34,13 @@ def get_grads_and_vars(max_ent_model: MaxEntModel,
   return grads_and_vars
 
 
-def quantize(model: MaxEntModel, precision: float):
-  quantized_bm = deepcopy(model)
-  for i, (param, _) in enumerate(model.params_and_obs):
-    quantized_bm.params_and_obs[i][0].assign(
-        quantize_tensor(param, precision))
-  return quantized_bm
+class Callback(abc.ABC):
+
+  @abc.abstractmethod
+  def __call__(self,
+               step: int,
+               real_particles: Particles,
+               fantasy_particles: Particles,
+               grads_and_vars: List[Tuple[tf.Tensor, tf.Tensor]],
+               ) -> None:
+    return NotImplemented

@@ -1,9 +1,10 @@
 import abc
 import tensorflow as tf
+from copy import deepcopy
 from typing import Callable, List, Optional
 
-from maxent.base import MaxEntModel, Particles, get_grads_and_vars
-from maxent.utils import inplace, infinity_norm, random
+from maxent.base import MaxEntModel, Particles, get_grads_and_vars, Callback
+from maxent.utils import inplace, infinity_norm, quantize_tensor, random
 
 
 class State(Particles):
@@ -65,18 +66,6 @@ class Initializer(abc.ABC):
     return NotImplemented
 
 
-class Callback(abc.ABC):
-  """For the `train` function of `BoltzmannMachine`."""
-
-  @abc.abstractmethod
-  def __call__(self,
-               step: int,
-               real_ambient: tf.Tensor,
-               fantasy_state: State,
-               ) -> None:
-    return NotImplemented
-
-
 @inplace('bm, e.t.c.')
 def train(bm: BoltzmannMachine,
           optimizer: tf.optimizers.Optimizer,
@@ -92,8 +81,10 @@ def train(bm: BoltzmannMachine,
     fantasy_state = contrastive_divergence(bm, fantasy_state, mc_steps)
 
     if callbacks:
+      real_latent = bm.get_latent_given_ambient(real_ambient).sample(bm.seed)
+      real_state = State(real_ambient, real_latent)
       for callback in callbacks:
-        callback(step, real_ambient, fantasy_state)
+        callback(step, real_state, fantasy_state, grads_and_vars)
 
   return fantasy_state
 
@@ -132,14 +123,14 @@ def _relax(activate: Callable[[State], State],
   """
 
   def shall_stop(state: State, new_state: State):
-    if infinity_norm(new_state.ambient - state.ambient) < tolerance:
+    if infinity_norm(new_state.ambient - state.ambient) > tolerance:
       return False
-    if infinity_norm(new_state.latent - state.latent) < tolerance:
+    if infinity_norm(new_state.latent - state.latent) > tolerance:
       return False
     return True
 
   step = 1
-  while step <= max_step:
+  while tf.less_equal(step, max_step):
     new_state = activate(state)
     if shall_stop(state, new_state):
       break
@@ -173,6 +164,14 @@ def get_reconstruction_error(bm: BoltzmannMachine,
   return norm(recon_ambient - ambient)
 
 
+def quantize(bm: BoltzmannMachine, precision: float, return_int: bool):
+  quantized_bm = deepcopy(bm)
+  for i, (param, _) in enumerate(bm.params_and_obs):
+    quantized_bm.params_and_obs[i][0].assign(
+        quantize_tensor(param, precision, return_int))
+  return quantized_bm
+
+
 class UpdateWithMasks:
   """For type-hinting.
 
@@ -199,9 +198,9 @@ def async_update(update_with_masks: UpdateWithMasks,
   Precisely, update `sync_ratio` percent elements for both ambient and latent
   at each iteration. And end up iterating when all elements have been updated.
   Only update once for each element.
-  """
-  assert sync_ratio > 0 and sync_ratio <= 1
 
+  The argument `sync_ratio` is in range (0, 1].
+  """
   if sync_ratio == 1:
     return update_with_masks(state, None, None)
 

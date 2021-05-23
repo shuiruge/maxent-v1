@@ -4,7 +4,7 @@ import abc
 import numpy as np
 import tensorflow as tf
 from collections import defaultdict
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 from functools import wraps
 
 
@@ -121,12 +121,48 @@ class History:
     return show_str
 
 
-# TODO: Use this instead: https://stackoverflow.com/questions/37001686/using-sparsetensor-as-a-trainable-variable/37807830#37807830  # noqa: E501
+class ComposedConstraint(tf.keras.constraints.Constraint):
+
+  def __init__(self, constraints: List[tf.keras.constraints.Constraint]):
+    self.constraints = constraints
+  
+  def __call__(self, kernel: tf.Tensor):
+    result = kernel
+    for constraint in self.constraints:
+      result = constraint(result)
+    return result
+
+
+class Connections:
+  pass
+
+
+class NoConnection(Connections):
+  pass
+
+
+class DenseConnections(Connections):
+  pass
+
+
+class SparseConnections(Connections):
+
+  def __init__(self):
+    self._connected: Dict[int, Set[int]] = defaultdict(set)
+  
+  def __iter__(self):
+    for i, js in self._connected.items():
+      for j in js:
+        yield i, j
+  
+  def connect(self, i: int, j: int):
+    self._connected[i].add(j)
+
+
 class SparsityConstraint(tf.keras.constraints.Constraint):
 
-  def __init__(self, sparsity: float, seed: int):
-    self.sparsity = sparsity
-    self.seed = seed
+  def __init__(self, connections: SparseConnections):
+    self.connections = connections
 
     self.mask = None
     self.built = False
@@ -137,11 +173,24 @@ class SparsityConstraint(tf.keras.constraints.Constraint):
     return self.mask * kernel
 
   def build(self, shape, dtype):
-    rand = random(shape=shape, seed=self.seed)
-    self.mask = tf.cast(
-        tf.where(rand > self.sparsity, 1, 0),
-        dtype)
+    mask = np.zeros(shape)
+    for i, j in self.connections:
+      mask[i, j] = 1
+    self.mask = tf.convert_to_tensor(mask, dtype=dtype)
     self.built = True
+
+
+def get_random_connections(size_a: int,
+                           size_b: int,
+                           sparsity: float):
+  """If sparsity is unit, then connection all. And if vanishing, then no
+  connection."""
+  connections = SparseConnections()
+  for i in range(size_a):
+    for j in range(size_b):
+      if np.random.random() < sparsity:
+        connections.connect(i, j)
+  return connections
 
 
 class SymmetricDiagonalVanishingConstraint(tf.keras.constraints.Constraint):
@@ -176,8 +225,10 @@ class ExponentialMovingAverage(MovingAverage):
     return tf.stack(smoothed, axis=axis)
 
 
-def quantize_tensor(x: tf.Tensor, precision: float):
-  return tf.cast(tf.cast(x / precision, 'int32'), x.dtype)
+def quantize_tensor(x: tf.Tensor, precision: float, return_int: bool):
+  """If `return_int`, then returns float type integer."""
+  quantized = tf.cast(tf.cast(x / precision, 'int32'), x.dtype)
+  return quantized if return_int else quantized * precision
 
 
 # TODO: add docstring.
