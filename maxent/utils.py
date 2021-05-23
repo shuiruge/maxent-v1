@@ -137,7 +137,7 @@ class Connections:
   pass
 
 
-class EmptyConnections(Connections):
+class NoConnection(Connections):
   pass
 
 
@@ -180,16 +180,16 @@ class SparsityConstraint(tf.keras.constraints.Constraint):
     self.built = True
 
 
-def get_random_connections(input_size: int,
-                           output_size: int,
-                           num_connections_per_units: int):
+def get_random_connections(size_a: int,
+                           size_b: int,
+                           sparsity: float):
+  """If sparsity is unit, then connection all. And if vanishing, then no
+  connection."""
   connections = SparseConnections()
-  for i in range(input_size):
-    js = np.random.choice(range(output_size),
-                          size=num_connections_per_units,
-                          replace=False)
-    for j in js:
-      connections.connect(i, j)
+  for i in range(size_a):
+    for j in range(size_b):
+      if np.random.random() < sparsity:
+        connections.connect(i, j)
   return connections
 
 
@@ -225,8 +225,10 @@ class ExponentialMovingAverage(MovingAverage):
     return tf.stack(smoothed, axis=axis)
 
 
-def quantize_tensor(x: tf.Tensor, precision: float):
-  return tf.cast(tf.cast(x / precision, 'int32'), x.dtype)
+def quantize_tensor(x: tf.Tensor, precision: float, return_int: bool):
+  """If `return_int`, then returns float type integer."""
+  quantized = tf.cast(tf.cast(x / precision, 'int32'), x.dtype)
+  return quantized if return_int else quantized * precision
 
 
 # TODO: add docstring.

@@ -31,3 +31,15 @@ def get_grads_and_vars(max_ent_model: MaxEntModel,
     grad_param = expect(ob(fantasy_particles)) - expect(ob(real_particles))
     grads_and_vars.append((grad_param, param))
   return grads_and_vars
+
+
+class Callback(abc.ABC):
+
+  @abc.abstractmethod
+  def __call__(self,
+               step: int,
+               real_particles: Particles,
+               fantasy_particles: Particles,
+               grads_and_vars: List[Tuple[tf.Tensor, tf.Tensor]],
+               ) -> None:
+    return NotImplemented
