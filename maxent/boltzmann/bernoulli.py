@@ -270,14 +270,14 @@ def activate_with_masks(bm: BernoulliBoltzmannMachine,
   new_v = Bernoulli(
       tf.sigmoid(h @ tf.transpose(W) + v @ L + bv)
   ).prob_argmax
-  v = update_with_mask(new_v, v, ambient_mask)
 
   # get latent given state
   new_h = Bernoulli(
       tf.sigmoid(v @ W + h @ J + bh)
   ).prob_argmax
-  h = update_with_mask(new_h, h, latent_mask)
 
+  v = update_with_mask(new_v, v, ambient_mask)
+  h = update_with_mask(new_h, h, latent_mask)
   return State(v, h)
 
 
